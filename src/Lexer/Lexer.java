@@ -67,7 +67,7 @@ public class Lexer {
         StringBuilder buffer = new StringBuilder();
         int indiceActual = indiceInicio;
 
-        while (indiceActual < fuente.length() && Character.isLetterOrDigit(fuente.charAt(indiceActual))) {
+        while (indiceActual < fuente.length() && (Character.isLetterOrDigit(fuente.charAt(indiceActual)) || fuente.charAt(indiceActual) == '_')) {
             buffer.append(fuente.charAt(indiceActual));
             indiceActual++;
         }
