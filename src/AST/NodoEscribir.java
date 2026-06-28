@@ -1,14 +1,32 @@
 package AST;
 
+/**
+ * Representa una instruccion de escritura o salida de datos (ESCRIBIR) del
+ * pseudocodigo. Encapsula la expresion cuyo valor se mostrara al usuario
+ * durante la ejecucion del programa, que puede ser un identificador,
+ * un literal numerico o una expresion aritmetica.
+ */
 public class NodoEscribir extends NodoArbol {
-    private final String identificador;
+    private final NodoArbol expresion;
 
-    public NodoEscribir(String identificador) {
-        this.identificador = identificador;
+    /**
+     * Construye un nodo de escritura.
+     *
+     * @param expresion Nodo del AST que representa el valor a imprimir
+     *                  (puede ser un NodoIdentificador, NodoLiteral o
+     *                  NodoOperacionBinaria).
+     */
+    public NodoEscribir(NodoArbol expresion) {
+        this.expresion = expresion;
     }
 
-    public String getIdentificador() {
-        return identificador;
+    /**
+     * Retorna la expresion cuyo valor se imprimira como salida.
+     *
+     * @return Nodo del AST que representa el valor a escribir.
+     */
+    public NodoArbol getExpresion() {
+        return expresion;
     }
 
     @Override

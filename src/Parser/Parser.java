@@ -17,6 +17,7 @@ public class Parser {
     private List<Token> tokens;
     private int posicionActual;
     private Token tokenActual;
+    private int ultimaLineaValida;
 
     /**
      * Prepara el analizador para empezar a leer el código, cargando la lista de
@@ -30,6 +31,7 @@ public class Parser {
         this.posicionActual = 0;
         // Inicializa el puntero de prebusqueda (lookahead) con el primer token
         this.tokenActual = tokens.isEmpty() ? null : tokens.get(0);
+        this.ultimaLineaValida = 1;
     }
 
     /**
@@ -38,6 +40,9 @@ public class Parser {
      * token de la lista, si existe.
      */
     private void avanzar() {
+        if (tokenActual != null && tokenActual.getTipo() != TokenType.EOF) {
+            ultimaLineaValida = tokenActual.getLinea();
+        }
         posicionActual++;
         // Actualiza el puntero de prebusqueda al siguiente token si esta disponible
         if (posicionActual < tokens.size()) {
@@ -54,16 +59,23 @@ public class Parser {
      * linea donde ocurrio.
      *
      * @param tipoEsperado El tipo de token que se espera segun la gramatica.
-     * @throws RuntimeException Si el tokenActual no coincide con el tipo
+     * @throws SyntaxException Si el tokenActual no coincide con el tipo
      * esperado.
      */
     private void consumir(TokenType tipoEsperado) {
         // Validacion estricta de la gramatica: se verifica que el token actual sea del tipo esperado
         if (tokenActual.getTipo() == tipoEsperado) {
             avanzar();
+        } else if (tokenActual.getTipo() == TokenType.EOF) {
+            throw new SyntaxException(
+                    "Error sintactico: Se esperaba " + tipoEsperado
+                    + " pero se llego al final del archivo (linea " + tokenActual.getLinea()
+                    + ") sin encontrarlo. La estructura abierta en la linea "
+                    + ultimaLineaValida + " podria estar incompleta."
+            );
         } else {
             // Patron Fail-Fast: se lanza una excepcion inmediatamente al detectar un error sintactico
-            throw new RuntimeException(
+            throw new SyntaxException(
                     "Error sintactico: Se esperaba " + tipoEsperado
                     + " pero se encontro " + tokenActual.getTipo()
                     + " en la linea " + tokenActual.getLinea()
@@ -106,7 +118,14 @@ public class Parser {
             case KEYWORD_WHILE:
                 return procesarMientras();
             default:
-                throw new RuntimeException("[X] Error sintactico: Sentencia invalida o estructura no reconocida. Inicial (" + tokenActual.getTipo() + ") en la linea " + tokenActual.getLinea());
+                if (tokenActual.getTipo() == TokenType.EOF) {
+                    throw new SyntaxException(
+                            "Error sintactico: Se llego al final del archivo (linea " + tokenActual.getLinea()
+                            + ") pero se esperaba una sentencia. La estructura abierta en la linea "
+                            + ultimaLineaValida + " podria estar incompleta."
+                    );
+                }
+                throw new SyntaxException("[X] Error sintactico: Sentencia invalida o estructura no reconocida. Inicial (" + tokenActual.getTipo() + ") en la linea " + tokenActual.getLinea());
         }
     }
 
@@ -124,16 +143,19 @@ public class Parser {
     }
 
     /**
-     * Valida la estructura de una instrucción de escritura, exigiendo que "ESCRIBIR" 
-     * vaya seguido de un identificador válido, y construye su nodo correspondiente.
+     * Valida la estructura de una instrucción de escritura, consumiendo la
+     * palabra clave "ESCRIBIR" seguida de una expresion aditiva (identificador,
+     * literal, o suma/resta). Se usa {@link #procesarExpresionAditiva()} en
+     * lugar de {@link #procesarExpresion()} para permitir expresiones completas
+     * (ESCRIBIR A+B) pero evitar comparaciones relacionales (ESCRIBIR A>B),
+     * que semanticamente no tienen sentido en una instruccion de escritura.
      *
-     * @return Un objeto NodoEscribir que encapsula el nombre de la variable a imprimir.
+     * @return Un objeto NodoEscribir que encapsula la expresion a imprimir.
      */
     private NodoEscribir procesarEscribir() {
         consumir(TokenType.KEYWORD_WRITE);
-        String nombreVariable = tokenActual.getValor();
-        consumir(TokenType.IDENTIFIER);
-        return new NodoEscribir(nombreVariable);
+        NodoArbol expr = procesarExpresionAditiva();
+        return new NodoEscribir(expr);
     }
 
     /**
@@ -197,26 +219,74 @@ public class Parser {
     }
 
     /**
-     * Valida expresiones matemáticas o relacionales (ej. "B + C" o "A > 0"), 
-     * asegurando que tengan la estructura correcta y construyendo el sub-árbol de la operación.
+     * Punto de entrada para el analisis de expresiones. Implementa la gramatica
+     * de precedencia:
+     * <pre>
+     * expresionRelacional → expresionAditiva ( ('>'|'<'|'==') expresionAditiva )?
+     * expresionAditiva     → hoja ( ('+'|'-') hoja )*
+     * </pre>
+     * Delega a {@link #procesarExpresionRelacional()} como punto de partida.
      *
-     * @return Un NodoArbol que representa la expresión. Si hay operadores, retorna un árbol 
-     *         binario (NodoExpresion con hijos); si es un valor aislado, retorna un nodo envoltorio 
-     *         con hijos nulos para mantener la uniformidad de la estructura.
+     * @return NodoArbol que representa la expresion completa (un nodo hoja,
+     *         un {@link NodoOperacionBinaria} o un {@link NodoComparacion}).
      */
     private NodoArbol procesarExpresion() {
-        NodoArbol izquierdo = crearNodoHoja();
+        return procesarExpresionRelacional();
+    }
+
+    /**
+     * Procesa una expresion relacional segun la gramatica:
+     * {@code expresionRelacional → expresionAditiva ( ('>'|'<'|'==') expresionAditiva )?}
+     * Evalua primero una expresion aditiva; si el token actual es un operador
+     * de comparacion, consume el operador y la expresion aditiva derecha,
+     * construyendo un {@link NodoComparacion}. En caso contrario, retorna
+     * directamente el resultado de la expresion aditiva.
+     *
+     * @return Un nodo hoja, {@link NodoOperacionBinaria} o {@link NodoComparacion}.
+     */
+    private NodoArbol procesarExpresionRelacional() {
+        NodoArbol izquierdo = procesarExpresionAditiva();
+
+        if (tokenActual.getTipo() == TokenType.GREATER_THAN) {
+            // Cuando el lexer tokenice '<' y '==', agregar las condiciones:
+            // || tokenActual.getTipo() == TokenType.LESS_THAN
+            // || tokenActual.getTipo() == TokenType.EQUALS
+            OperadorComparacion op = OperadorComparacion.GREATER_THAN;
+            avanzar();
+            NodoArbol derecho = procesarExpresionAditiva();
+            return new NodoComparacion(izquierdo, derecho, op);
+        }
+
+        return izquierdo;
+    }
+
+    /**
+     * Procesa una expresion aditiva segun la gramatica:
+     * {@code expresionAditiva → hoja ( ('+'|'-') hoja )*}
+     * Obtiene la primera hoja y luego entra en un bucle: mientras el token
+     * actual sea un operador aditivo, avanza, obtiene la siguiente hoja y
+     * construye un {@link NodoOperacionBinaria} left-associative usando como
+     * lado izquierdo el resultado acumulado de la iteracion anterior.
+     * Esto permite encadenar operadores: {@code B + C + D} se parsea como
+     * {@code ((B + C) + D)}.
+     *
+     * @return Un nodo hoja o un {@link NodoOperacionBinaria} left-associative.
+     */
+    private NodoArbol procesarExpresionAditiva() {
+        NodoArbol acumulado = crearNodoHoja();
         avanzar();
 
-        if (tokenActual.getTipo() == TokenType.PLUS || tokenActual.getTipo() == TokenType.GREATER_THAN) {
-            Operador op = mapearOperador(tokenActual.getTipo());
+        // Cuando el lexer tokenice '-', agregar:
+        // || tokenActual.getTipo() == TokenType.MINUS
+        while (tokenActual.getTipo() == TokenType.PLUS) {
+            OperadorAritmetico op = OperadorAritmetico.PLUS;
             avanzar();
             NodoArbol derecho = crearNodoHoja();
             avanzar();
-            return new NodoExpresion(izquierdo, derecho, op);
+            acumulado = new NodoOperacionBinaria(acumulado, derecho, op);
         }
 
-        return new NodoExpresion(izquierdo, null, null);
+        return acumulado;
     }
 
     /**
@@ -224,7 +294,7 @@ public class Parser {
      * una variable (identificador) o un número literal, y construye el nodo correspondiente.
      *
      * @return Un NodoIdentificador o un NodoLiteral, dependiendo del tipo de token actual.
-     * @throws RuntimeException Si el token no es ni un identificador ni un número, 
+     * @throws SyntaxException Si el token no es ni un identificador ni un número, 
      *         indicando que la expresión está malformada.
      */
     private NodoArbol crearNodoHoja() {
@@ -234,25 +304,16 @@ public class Parser {
         if (tokenActual.getTipo() == TokenType.NUMBER) {
             return new NodoLiteral(tokenActual.getValor());
         }
-        throw new RuntimeException(
+        if (tokenActual.getTipo() == TokenType.EOF) {
+            throw new SyntaxException(
+                "Error sintactico: Se esperaba un identificador o numero pero se llego al final del archivo"
+                + " (linea " + tokenActual.getLinea() + "). La expresion iniciada en la linea "
+                + ultimaLineaValida + " esta incompleta."
+            );
+        }
+        throw new SyntaxException(
             "Error sintactico: Se esperaba un identificador o numero, pero se encontro " +
             tokenActual.getTipo() + " en la linea " + tokenActual.getLinea()
-        );
-    }
-
-     /**
-     * Traduce el tipo de token del operador (del Lexer) a su enumerador interno 
-     * del AST, actuando como un puente entre las dos capas del sistema.
-     *
-     * @param tipo El TokenType del operador encontrado (PLUS o GREATER_THAN).
-     * @return El valor del enumerador Operador correspondiente para ser guardado en el NodoExpresion.
-     */
-    private Operador mapearOperador(TokenType tipo) {
-        if (tipo == TokenType.PLUS) return Operador.PLUS;
-        if (tipo == TokenType.GREATER_THAN) return Operador.GREATER_THAN;
-        throw new RuntimeException(
-            "Error sintactico: Operador no soportado " + tipo +
-            " en la linea " + tokenActual.getLinea()
         );
     }
 }

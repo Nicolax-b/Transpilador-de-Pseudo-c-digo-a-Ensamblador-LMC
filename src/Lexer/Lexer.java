@@ -114,6 +114,7 @@ public class Lexer {
      * @param linea          El número de línea actual.
      * @param tokens         La lista donde se guardará el token resultante.
      * @return La nueva posición del cursor (simplemente el índice actual + 1, ya que son de 1 carácter).
+     * @throws LexicalException Si el carácter no es un símbolo válido del lenguaje.
      */
     private int consumirSimbolo(char caracterActual, int indiceActual, int linea, List<Token> tokens) {
         switch (caracterActual) {
@@ -127,7 +128,7 @@ public class Lexer {
                 tokens.add(new Token(linea, TokenType.GREATER_THAN, ">"));
                 break;
             default:
-                throw new RuntimeException("Error léxico: Carácter no reconocido '" + caracterActual + "' en la línea " + linea);
+                throw new LexicalException("Error léxico: Carácter no reconocido '" + caracterActual + "' en la línea " + linea);
         }
         return indiceActual + 1;
     }
